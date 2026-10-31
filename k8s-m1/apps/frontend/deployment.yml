@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata: 
+  name: frontend-deployment
+
+spec:
+  replicas: 3
+  selector: 
+    matchLabels:
+      app: frontend
+
+  template: 
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers: 
+      - name: frontendstock
+        image: josefa613/stock_frontend_prod:latest
+        ports:
+          - containerPort: 80
+        envFrom:
+        - secretRef:
+           name: frontend-secret
