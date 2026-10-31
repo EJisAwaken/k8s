@@ -82,6 +82,8 @@ jobs:
           file: ./frontend/Dockerfile
           push: true
           tags: ${{ secrets.DOCKER_USERNAME }}/stock_frontend_prod:latest
+          build-args: |
+            BACKEND_INTERNAL_URL=http://backend-service:8080
 
   buildpushbackend:
     needs: test-backend
