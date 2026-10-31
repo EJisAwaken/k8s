@@ -1,0 +1,4 @@
+POSTGRES_DB=stockdb
+POSTGRES_USER=stockuser
+POSTGRES_PASSWORD=stockpassword
+

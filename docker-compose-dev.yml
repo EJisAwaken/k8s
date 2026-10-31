@@ -1,0 +1,64 @@
+services:
+  backend:
+    env_file:
+      - .envDev
+    container_name: nantenaina_backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5008:8080"
+    environment:
+      DB_URL: jdbc:postgresql://bd:5432/${POSTGRES_DB:-ecole_db}
+      DB_USER: ${POSTGRES_USER:-ecole_user}
+      DB_PASS: ${POSTGRES_PASSWORD:-ecole_dev_pass}
+      SERVER_PORT: 8080
+    depends_on:
+      - bd
+    networks:
+      - josefa
+
+
+  bd:
+    env_file:
+      - .envDev
+    container_name: tsanta_postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "7000:5432"
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-ecole_db}
+      POSTGRES_USER:     ${POSTGRES_USER:-ecole_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ecole_dev_pass}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - josefa
+
+
+  frontendc:
+    container_name: nantenaina_front
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_INTERNAL_URL: http://backend:8080
+    ports:
+      - "4001:80"
+    environment:
+      - BACKEND_INTERNAL_URL=http://backend:8080
+    depends_on:
+      - backend
+    networks:
+      - josefa
+
+
+volumes:
+  postgres_dev_data:
+    name: postgres_dev_tsanta_data
+
+networks:
+    josefa:
+        name: josefanetwork
+        driver: bridge

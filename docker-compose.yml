@@ -1,0 +1,55 @@
+services:
+
+  backend:
+    container_name: stock_backend_prod
+    image: josefa613/stock_backend_prod:latest
+    ports:
+      - "5008:8080"
+    environment:
+      DB_URL: jdbc:postgresql://bd:5432/${POSTGRES_DB:-stockdb}
+      DB_USER: ${POSTGRES_USER:-stockuser}
+      DB_PASS: ${POSTGRES_PASSWORD:-stockpassword}
+      SERVER_PORT: 8080
+    depends_on:
+      - bd
+    networks:
+      - josefa
+
+
+  bd:
+    container_name: tsanta_postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "7000:5432"
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-stockdb}
+      POSTGRES_USER:     ${POSTGRES_USER:-stockuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpassword}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - josefa
+
+
+  frontendc:
+    container_name: stock_front_prod
+    image: josefa613/stock_frontend_prod:latest
+    ports:
+      - "4001:80"
+    environment:
+      - BACKEND_INTERNAL_URL=http://backend:8080
+    depends_on:
+      - backend
+    networks:
+      - josefa
+
+
+volumes:
+  postgres_dev_data:
+    name: postgres_dev_tsanta_data
+
+networks:
+  josefa:
+    name: josefanetwork
+    driver: bridge
