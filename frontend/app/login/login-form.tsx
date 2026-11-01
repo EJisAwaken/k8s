@@ -54,7 +54,7 @@ export function LoginForm() {
           <Package2 size={24} />
         </span>
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Nantenaina et tsanta joue ensemble</h1>
+          <h1 className="text-xl font-bold tracking-tight"> 2026ensemble</h1>
           <p className="text-sm text-muted-foreground">testeur , Esoalahy josefa, import Chine et suivi clients</p>
         </div>
       </div>
