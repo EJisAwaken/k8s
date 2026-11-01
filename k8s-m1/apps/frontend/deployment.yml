@@ -18,6 +18,7 @@ spec:
       containers: 
       - name: frontendstock
         image: josefa613/stock_frontend_prod:latest
+        imagePullPolicy: Always
         ports:
           - containerPort: 80
         envFrom:

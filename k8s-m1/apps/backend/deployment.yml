@@ -17,6 +17,7 @@ spec:
       containers:
        - name: backend-stock
          image: josefa613/stock_backend_prod:latest
+         imagePullPolicy: Always
          ports:
            - containerPort: 8080
          envFrom:

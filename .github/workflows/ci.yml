@@ -1,8 +1,14 @@
-name: Test CI/CD Workflow
+name: CI
 on:
+  release:
+    types: [published]
   push:
     branches:
       - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
 
 permissions:
   contents: read
@@ -10,142 +16,140 @@ permissions:
 jobs:
   test-frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
     steps:
-      - name: Recuperer le code source
-        uses: actions/checkout@v6
+      - name: Récupérer le code
+        uses: actions/checkout@v7
 
-      - name: installer nodejs
-        uses: actions/setup-node@v6
+      - name: Installer Node.js (cache npm)
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: 'frontend/package-lock.json'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
-      - name: build frontend
-        working-directory: frontend
-        run: |
-          npm ci
-          npm run build
+      - name: Restaurer le cache de build Next.js
+        uses: actions/cache@v6
+        with:
+          path: frontend/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}-${{ hashFiles('frontend/**/*.ts', 'frontend/**/*.tsx', 'frontend/**/*.css', '!frontend/node_modules/**') }}
+          restore-keys: |
+            next-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}-
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Vérifier les types
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
 
   test-backend:
-      runs-on: ubuntu-latest
-      steps:
-        - name: Checkout code
-          uses: actions/checkout@v4
-
-        - name: Set up JDK 21
-          uses: actions/setup-java@v6
-          with:
-            java-version: '21'
-            distribution: 'temurin'
-            cache: maven
-
-
-        - name: Run backend tests
-          working-directory: backend
-          run: |
-            ./mvnw -q -B -DskipTests package -Dmaven.test.skip=true
-
-
-
-  buildpushfrontend:
-    needs: test-frontend
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      packages: write
-
+    timeout-minutes: 15
+    # Les tests d'intégration ont besoin d'un vrai Postgres (Flyway, contraintes SQL).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stock_test
+          POSTGRES_USER: stock_user
+          POSTGRES_PASSWORD: stock_ci_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stock_user -d stock_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Récupérer le code
+        uses: actions/checkout@v7
 
-      - name: Extract Docker image metadata
+      - name: Installer le JDK 21 (cache Maven)
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: maven
+
+      - name: Lancer les tests et packager
+        working-directory: backend
+        env:
+          TEST_DB_URL: jdbc:postgresql://localhost:5432/stock_test
+          TEST_DB_USER: stock_user
+          TEST_DB_PASS: stock_ci_pass
+        run: ./mvnw -B verify
+
+      - name: Conserver les rapports de tests en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: backend/target/surefire-reports
+          retention-days: 7
+
+  build-push:
+    name: build-push (${{ matrix.service }})
+    needs: [test-frontend, test-backend]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: frontend
+            image: stock_frontend_prod
+            # Le rewrite /api/v1/* de Next est figé au build.
+            build-args: |
+              BACKEND_INTERNAL_URL=http://backend-service:8080
+          - service: backend
+            image: stock_backend_prod
+            build-args: ''
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v7
+
+      - name: Calculer les tags de l'image
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ secrets.DOCKER_USERNAME }}/my-image
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}
+          # Le tag de l'image est exactement celui de la release.
+          # Une pre-release ne déplace pas latest.
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=${{ github.event.release.tag_name }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
 
-      - name: Log in to Docker
+      - name: Se connecter à Docker Hub
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Set up Docker Buildx
+      - name: Préparer Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: buildfrontend
-        uses: docker/build-push-action@v6
+      - name: Construire et pousser l'image
+        uses: docker/build-push-action@v7
         with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/stock_frontend_prod:latest
-          build-args: |
-            BACKEND_INTERNAL_URL=http://backend-service:8080
-
-  buildpushbackend:
-    needs: test-backend
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      packages: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Extract Docker image metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ secrets.DOCKER_USERNAME }}/my-image
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: build backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
+          context: ./${{ matrix.service }}
+          file: ./${{ matrix.service }}/Dockerfile
           target: production
-          file: ./backend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/stock_backend_prod:latest
-
-  deploy:
-    needs: [buildpushfrontend, buildpushbackend]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout du code
-        uses: actions/checkout@v4
-
-      - name: Envoyer docker-compose.yml via SCP
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "docker-compose.yml"
-          target: "/home/ubuntu/stock_app"
-
-      - name: Deploy to server
-        uses: appleboy/ssh-action@v0.1.9
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-
-          script: |
-            mkdir -p /home/ubuntu/stock_app
-            cd /home/ubuntu/stock_app
-            docker compose -f docker-compose.yml pull
-            docker compose -f docker-compose.yml up --build -d
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build-args }}
+          # Cache des couches Docker dans le registry : il reste lisible d'une release à l'autre.
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}:buildcache,mode=max
