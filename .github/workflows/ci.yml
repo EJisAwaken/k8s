@@ -121,11 +121,16 @@ jobs:
       - name: Récupérer le code
         uses: actions/checkout@v7
 
+      # Les noms d'images Docker doivent être en minuscules (le propriétaire est "EJisAwaken").
+      - name: Nom de l'image
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/stock-${{ matrix.service }}" >> "$GITHUB_OUTPUT"
+
       - name: Calculer les tags de l'image
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}
+          images: ${{ steps.img.outputs.name }}
           flavor: |
             latest=false
           tags: |
@@ -151,8 +156,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build-args }}
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ steps.img.outputs.name }}:buildcache
+          cache-to: type=registry,ref=${{ steps.img.outputs.name }}:buildcache,mode=max
 
   # Déploiement : runner auto-hébergé sur k8s-master (le cluster est sur un LAN privé, injoignable
   # depuis les runners GitHub ; c'est le runner qui ouvre une connexion sortante vers GitHub).
