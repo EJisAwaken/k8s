@@ -1,0 +1,33 @@
+# helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+#   --version 4.15.1 -n ingress-nginx --create-namespace -f ingress/ingress-nginx-values.yml
+#
+# Pas de LoadBalancer sur un cluster bare-metal : le contrôleur tourne en DaemonSet
+# sur chaque Worker et écoute directement sur les ports 80/443 du nœud (hostPort).
+# Le Service NodePort reste disponible en secours (30080/30443).
+controller:
+  kind: DaemonSet
+  # Le contrôleur doit tourner sur worker02 malgré le taint dedicated=prod.
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: prod
+      effect: NoSchedule
+  hostPort:
+    enabled: true
+    ports:
+      http: 80
+      https: 443
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30080
+      https: 30443
+  ingressClassResource:
+    name: nginx
+    default: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

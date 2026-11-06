@@ -1,0 +1,63 @@
+# Job d'initialisation de la base (TP 9.5).
+# Le schéma applicatif est géré par Flyway au démarrage du backend ; ce Job prépare ce qui
+# relève de l'exploitation : un rôle PostgreSQL "stock_backup" en LECTURE SEULE,
+# utilisé par le CronJob de sauvegarde (moindre privilège : la sauvegarde n'a pas le compte propriétaire).
+#
+# Idempotent : peut être rejoué sans erreur. Un Job terminé est immuable ; pour le relancer :
+#   kubectl -n prod delete job db-init && kubectl apply -f jobs/db-init.yml
+#   kubectl -n prod logs job/db-init
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  namespace: prod
+spec:
+  backoffLimit: 4                 # 4 nouvelles tentatives au maximum avant l'échec du Job
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400  # le Job et ses Pods sont supprimés 24 h après la fin
+  template:
+    metadata:
+      labels:
+        app: db-init
+        db-access: "true"         # autorisé par network-policies/30-allow-backend-to-database.yml
+    spec:
+      restartPolicy: OnFailure    # Never ou OnFailure : Always est interdit pour un Job
+      initContainers:
+        # Attend que la base accepte les connexions avant de lancer le script.
+        - name: wait-for-db
+          image: postgres:16-alpine
+          command: ["sh", "-c", "until pg_isready -h database -p 5432; do echo 'base indisponible, attente...'; sleep 3; done"]
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      containers:
+        - name: init
+          image: postgres:16-alpine
+          env:
+            - name: PGHOST
+              value: database
+            - name: PGDATABASE
+              valueFrom: { configMapKeyRef: { name: app-config, key: DB_NAME } }
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_USER } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_PASSWORD } }
+            - name: BACKUP_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_BACKUP_PASSWORD } }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              psql -v ON_ERROR_STOP=1 -v pw="$BACKUP_PASSWORD" -v db="$PGDATABASE" <<'SQL'
+              SELECT 'CREATE ROLE stock_backup LOGIN'
+               WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stock_backup') \gexec
+              ALTER ROLE stock_backup WITH LOGIN PASSWORD :'pw';
+              GRANT CONNECT ON DATABASE :"db" TO stock_backup;
+              GRANT pg_read_all_data TO stock_backup;
+              SQL
+              echo "Rôle stock_backup prêt."
+              psql -c "\du stock_backup"
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }

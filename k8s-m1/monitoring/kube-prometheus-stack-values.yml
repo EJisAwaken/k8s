@@ -1,0 +1,94 @@
+# helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+#   --version 92.21.2 -n monitoring --create-namespace -f monitoring/kube-prometheus-stack-values.yml
+#
+# Stack : Prometheus Operator + Prometheus + Grafana + kube-state-metrics + node-exporter.
+# Réglée pour des VMs de 4 Go : pas d'Alertmanager, rétention courte.
+
+# Toleration commune : la stack peut aussi tourner sur k8s-worker02 (taint dedicated=prod).
+.tolerations: &tol
+  - key: dedicated
+    operator: Equal
+    value: prod
+    effect: NoSchedule
+
+alertmanager:
+  enabled: false
+
+# Sur un cluster kubeadm, etcd, scheduler, controller-manager et kube-proxy n'exposent leurs
+# métriques que sur 127.0.0.1 du master : les cibles seraient "down" en permanence.
+# On les désactive plutôt que d'afficher de fausses alertes (évolution : --bind-address=0.0.0.0).
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheusOperator:
+  tolerations: *tol
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 192Mi }
+
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    scrapeInterval: 30s
+    tolerations: *tol
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits: { memory: 1Gi }
+    # Découvre les ServiceMonitor/PodMonitor de tous les namespaces, pas seulement ceux du chart.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+
+# Métriques d'état des objets Kubernetes (Deployments, Pods, Nodes...).
+kube-state-metrics:
+  tolerations: *tol
+  resources:
+    requests: { cpu: 20m, memory: 64Mi }
+    limits: { memory: 128Mi }
+
+# Métriques système de chaque nœud (CPU, RAM, disque). DaemonSet : doit tourner partout,
+# y compris sur le master et sur worker02.
+prometheus-node-exporter:
+  tolerations:
+    - operator: Exists
+      effect: NoSchedule
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 64Mi }
+
+grafana:
+  tolerations: *tol
+  # Mot de passe admin généré par le chart, stocké dans le Secret monitoring-grafana :
+  #   kubectl -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 -d
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.k8s.local
+  # Le sidecar charge automatiquement toute ConfigMap portant le label grafana_dashboard=1
+  # (voir monitoring/dashboard-stock.yml).
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+  # Incident rencontré à l'installation : Grafana 13 met plusieurs minutes à exécuter ses
+  # migrations au premier démarrage ; la livenessProbe par défaut (60 s + 10 x 10 s) le tuait
+  # avant la fin -> redémarrages en boucle. On lui laisse 5 min avant la première vérification.
+  livenessProbe:
+    httpGet:
+      path: /api/health
+      port: 3000
+    initialDelaySeconds: 300
+    periodSeconds: 10
+    timeoutSeconds: 30
+    failureThreshold: 10
+  resources:
+    # Mesuré : ~470Mi en usage (dashboard ouvert pendant une charge) -> limite 768Mi.
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 768Mi }

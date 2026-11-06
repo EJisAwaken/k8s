@@ -1,0 +1,116 @@
+# Service headless : donne une identité DNS stable à chaque Pod
+# (database-0.database-headless.prod.svc.cluster.local). Obligatoire pour un StatefulSet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: database-headless
+  namespace: prod
+  labels:
+    app: database
+spec:
+  clusterIP: None
+  selector:
+    app: database
+  ports:
+    - name: postgres
+      port: 5432
+---
+# Service ClusterIP utilisé par le backend : interne au cluster, plus de NodePort sur la base.
+apiVersion: v1
+kind: Service
+metadata:
+  name: database
+  namespace: prod
+  labels:
+    app: database
+spec:
+  type: ClusterIP
+  selector:
+    app: database
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: database
+  namespace: prod
+spec:
+  serviceName: database-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: database
+  template:
+    metadata:
+      labels:
+        app: database
+        tier: data
+    spec:
+      # nodeSelector : forme la plus simple de contrainte de placement (égalité de labels).
+      # Redondant avec la nodeAffinity du PV, mais rend l'intention explicite.
+      nodeSelector:
+        storage: db
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          # L'image postgres attend POSTGRES_* : on les alimente depuis la ConfigMap et le Secret
+          # communs, pour n'avoir qu'une seule source de vérité partagée avec le backend.
+          # (Ces variables ne servent qu'à l'initialisation d'un volume vide.)
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_NAME
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_PASSWORD
+            # Sous-dossier : le point de montage peut contenir lost+found, que initdb refuse.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  # Un PVC par replica, nommé data-database-<index>, conservé même si le Pod est supprimé.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        storageClassName: local-storage
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi

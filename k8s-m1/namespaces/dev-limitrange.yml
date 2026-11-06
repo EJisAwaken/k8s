@@ -1,0 +1,22 @@
+# Valeurs par défaut et bornes par conteneur dans dev.
+# Indispensable avec la ResourceQuota : sans requests/limits, un Pod serait refusé.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: dev-limits
+  namespace: dev
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 250m
+        memory: 256Mi
+      min:
+        cpu: 50m
+        memory: 64Mi
+      max:
+        cpu: 500m
+        memory: 512Mi

@@ -1,0 +1,12 @@
+# Point de départ "zéro confiance" : plus aucun Pod de prod n'accepte de trafic entrant.
+# Les politiques suivantes ouvrent uniquement les flux nécessaires (elles s'additionnent).
+# Les probes du kubelet ne sont pas concernées : Calico autorise le trafic du nœud vers ses Pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: prod
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress

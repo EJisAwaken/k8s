@@ -1,0 +1,19 @@
+# Configuration NON sensible : lisible par quiconque a le droit de lire les ConfigMaps,
+# visible en clair dans "kubectl describe". Les mots de passe vont dans secrets/app-secret.yml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: prod
+data:
+  # Variables demandées par le TP
+  APP_ENV: prod
+  APP_NAME: stock
+  LOG_LEVEL: INFO               # -> LOGGING_LEVEL_ROOT de Spring (voir deployments/backend.yml)
+  API_URL: http://backend-service:8080
+  # Configuration réellement lue par le backend Spring Boot
+  SERVER_PORT: "8080"
+  DB_NAME: stockdb
+  DB_URL: jdbc:postgresql://database:5432/stockdb
+  APP_CORS_ORIGINS: http://app.k8s.local
+  APP_COOKIE_SECURE: "false"    # passer à "true" dès que l'Ingress sert du HTTPS

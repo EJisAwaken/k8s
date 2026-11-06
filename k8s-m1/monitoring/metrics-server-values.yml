@@ -1,0 +1,15 @@
+# helm upgrade --install metrics-server metrics-server/metrics-server \
+#   --version 3.14.0 -n kube-system -f monitoring/metrics-server-values.yml
+#
+# Les kubelets d'un cluster kubeadm servent un certificat auto-signé (serverTLSBootstrap absent) :
+# metrics-server ne peut pas le vérifier. --kubelet-insecure-tls est acceptable en laboratoire ;
+# en production on activerait serverTLSBootstrap et on approuverait les CSR des kubelets.
+args:
+  - --kubelet-insecure-tls
+  - --kubelet-preferred-address-types=InternalIP
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi

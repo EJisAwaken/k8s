@@ -1,0 +1,64 @@
+# Démonstration StorageClass -> PV -> PVC -> Pod (TP 8.5).
+#   kubectl apply -f storage/demo-persistance.yml
+#   kubectl -n dev exec demo-volume -- sh -c 'date >> /data/preuve.txt; cat /data/preuve.txt'
+#   kubectl -n dev delete pod demo-volume && kubectl apply -f storage/demo-persistance.yml
+#   kubectl -n dev exec demo-volume -- cat /data/preuve.txt   # le contenu est toujours là
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-demo-dev
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  claimRef:
+    namespace: dev
+    name: pvc-demo
+  hostPath:
+    path: /data/k8s/dev/demo
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker01
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-demo
+  namespace: dev
+spec:
+  storageClassName: local-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-volume
+  namespace: dev
+spec:
+  containers:
+    - name: busybox
+      image: busybox:1.37
+      command: ["sh", "-c", "sleep 36000"]
+      resources:
+        requests: { cpu: 50m, memory: 64Mi }
+        limits: { cpu: 100m, memory: 64Mi }
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: pvc-demo

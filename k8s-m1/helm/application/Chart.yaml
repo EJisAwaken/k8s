@@ -1,0 +1,8 @@
+apiVersion: v2
+name: application
+description: Application Stock (frontend Next.js, backend Spring Boot, PostgreSQL) — TP Kubernetes M1
+type: application
+# Version du chart : à incrémenter à chaque changement des templates.
+version: 1.1.0
+# Version de l'application déployée par défaut.
+appVersion: "2.1.0"

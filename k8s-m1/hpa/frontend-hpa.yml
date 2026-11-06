@@ -1,0 +1,25 @@
+# HPA demandé par le TP : 2 à 10 replicas, cible 60 % de CPU.
+# Le pourcentage est calculé sur requests.cpu (50m) : 60 % = 30m de moyenne par Pod.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend
+  namespace: prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: frontend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    # Descente lente (5 min de stabilisation) pour éviter le yo-yo après un pic.
+    scaleDown:
+      stabilizationWindowSeconds: 300

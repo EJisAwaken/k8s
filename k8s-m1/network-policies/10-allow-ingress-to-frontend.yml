@@ -1,0 +1,24 @@
+# Seul le contrôleur Ingress (namespace ingress-nginx) atteint le frontend.
+# Le générateur de charge de l'HPA est aussi autorisé (hpa/load-generator.yml).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-frontend
+  namespace: prod
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app: load-generator
+      ports:
+        - protocol: TCP
+          port: 3000   # port du Pod (targetPort), pas celui du Service

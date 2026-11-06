@@ -1,0 +1,29 @@
+# Volume de la base de prod, sur le disque de k8s-worker01.
+# claimRef réserve ce PV au PVC créé par le StatefulSet (volumeClaimTemplates "data" + Pod database-0).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-postgres-prod
+  labels:
+    app: database
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  claimRef:
+    namespace: prod
+    name: data-database-0
+  hostPath:
+    path: /data/k8s/prod/postgres
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker01
