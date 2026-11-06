@@ -54,7 +54,7 @@ export function LoginForm() {
           <Package2 size={24} />
         </span>
         <div>
-          <h1 className="text-xl font-bold tracking-tight"> Test d'automatisation de pipeline</h1>
+          <h1 className="text-xl font-bold tracking-tight"> Test d&apos;automatisation de pipeline</h1>
           <p className="text-sm text-muted-foreground">testeur , Esoalahy josefa, import Chine et suivi clients</p>
         </div>
       </div>
