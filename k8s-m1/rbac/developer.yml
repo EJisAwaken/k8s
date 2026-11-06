@@ -1,0 +1,32 @@
+# Compte "developer" : lecture seule sur les Pods et Services du namespace prod.
+# Aucun droit de suppression de Pods ni de création de Deployments.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer
+  namespace: prod
+---
+# Role (et non ClusterRole) : les droits s'arrêtent au namespace prod.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-service-reader
+  namespace: prod
+rules:
+  - apiGroups: [""]          # "" = groupe core (pods, services, configmaps...)
+    resources: ["pods", "services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: developer-pod-service-reader
+  namespace: prod
+subjects:
+  - kind: ServiceAccount
+    name: developer
+    namespace: prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pod-service-reader

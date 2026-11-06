@@ -96,23 +96,26 @@ jobs:
           path: backend/target/surefire-reports
           retention-days: 7
 
+  # Images versionnées poussées dans le registry privé GitHub Container Registry (ghcr.io).
+  # Le tag de l'image est exactement celui de la release (ex. v2.1.0) : traçable et immuable.
   build-push:
     name: build-push (${{ matrix.service }})
     needs: [test-frontend, test-backend]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write          # pousser dans ghcr.io avec le GITHUB_TOKEN, sans secret à gérer
     strategy:
       fail-fast: false
       matrix:
         include:
           - service: frontend
-            image: stock_frontend_prod
             # Le rewrite /api/v1/* de Next est figé au build.
             build-args: |
               BACKEND_INTERNAL_URL=http://backend-service:8080
           - service: backend
-            image: stock_backend_prod
             build-args: ''
     steps:
       - name: Récupérer le code
@@ -122,20 +125,18 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}
-          # Le tag de l'image est exactement celui de la release.
-          # Une pre-release ne déplace pas latest.
+          images: ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}
           flavor: |
             latest=false
           tags: |
             type=raw,value=${{ github.event.release.tag_name }}
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
 
-      - name: Se connecter à Docker Hub
+      - name: Se connecter à ghcr.io
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Préparer Buildx
         uses: docker/setup-buildx-action@v4
@@ -150,6 +151,47 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build-args }}
-          # Cache des couches Docker dans le registry : il reste lisible d'une release à l'autre.
-          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}:buildcache
-          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/${{ matrix.image }}:buildcache,mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/stock-${{ matrix.service }}:buildcache,mode=max
+
+  # Déploiement : runner auto-hébergé sur k8s-master (le cluster est sur un LAN privé, injoignable
+  # depuis les runners GitHub ; c'est le runner qui ouvre une connexion sortante vers GitHub).
+  # Il agit avec le compte Kubernetes ci-deployer, limité au namespace prod (cicd/ci-deployer-rbac.yml).
+  deploy:
+    needs: build-push
+    if: github.event_name == 'release'
+    runs-on: [self-hosted, k8s-deploy]
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: deploy-prod          # jamais deux déploiements en même temps
+      cancel-in-progress: false
+    env:
+      KUBECONFIG: /home/josefa/.kube/ci-deployer.config
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Récupérer le code (chart versionné)
+        uses: actions/checkout@v7
+
+      - name: Déployer avec Helm
+        # --rollback-on-failure : si les Pods ne deviennent pas prêts, Helm revient tout seul
+        # à la dernière révision saine et le job échoue.
+        run: |
+          helm upgrade application ./k8s-m1/helm/application -n prod \
+            --set frontend.image.tag="$TAG" \
+            --set backend.image.tag="$TAG" \
+            --rollback-on-failure --timeout 10m
+
+      - name: Tester le déploiement
+        run: helm test application -n prod --logs
+
+      - name: Résumé
+        if: always()
+        run: |
+          {
+            echo "### Déploiement $TAG"
+            echo '```'
+            helm history application -n prod --max 3
+            kubectl -n prod get deploy -o custom-columns=DEPLOYMENT:.metadata.name,IMAGE:.spec.template.spec.containers[0].image,PRETS:.status.readyReplicas
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

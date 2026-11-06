@@ -1,0 +1,144 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: prod
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        tier: api
+    spec:
+      # SecurityContext du Pod (TP 10.5) : jamais root, profil seccomp par défaut du runtime.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Autorisé sur k8s-worker02, nœud réservé à la production (taint dedicated=prod).
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: prod
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          # Uniquement sur les Workers marqués workload=app (le master reste exclu).
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values: ["app"]
+      # Répartition STRICTE : jamais plus d'un backend d'écart entre deux nœuds.
+      # Avec 2 replicas : un par Worker, garanti. Compatible avec l'HPA (4 replicas = 2 + 2),
+      # contrairement à une podAntiAffinity "required" qui bloquerait au-delà de 2 replicas.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+          # Ne compter que les Pods de la MÊME révision. Sans cela, pendant un rollout, l'ancien Pod
+          # (encore sur worker01) est compté : les deux nouveaux partent sur worker02 et, une fois
+          # l'ancien supprimé, les deux replicas se retrouvent sur le même nœud (constaté en TP).
+          matchLabelKeys:
+            - pod-template-hash
+      containers:
+        - name: backend
+          image: josefa613/stock_backend_prod:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          # Toute la ConfigMap devient des variables d'environnement.
+          envFrom:
+            - configMapRef:
+                name: app-config
+          # Les secrets sont injectés clé par clé, sous les noms attendus par Spring.
+          env:
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_USER
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_PASSWORD
+            - name: APP_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: API_TOKEN
+            # $(LOG_LEVEL) est résolu à partir de la ConfigMap chargée par envFrom.
+            - name: LOGGING_LEVEL_ROOT
+              value: $(LOG_LEVEL)
+            # La JVM prend 25 % de la limite mémoire par défaut : trop peu sous 1Gi.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=70"
+          # Mesuré : ~470Mi au repos. QoS Burstable (requests < limits).
+          # SecurityContext du conteneur : système de fichiers en lecture seule, aucune capability
+          # Linux, pas d'élévation de privilèges (setuid, sudo...).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp            # Tomcat et la JVM écrivent dans /tmp
+              mountPath: /tmp
+          # Arrêt propre : le Pod continue de servir 10 s après le SIGTERM, le temps que les
+          # endpoints et l'Ingress cessent de lui envoyer du trafic (sinon : quelques 503 à
+          # chaque rollout, mesurés en TP). Ensuite seulement, l'application s'arrête.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # Spring démarre en 60 à 110 s : la startupProbe laisse jusqu'à 180 s (36 x 5 s)
+          # et suspend les deux autres probes tant qu'elle n'a pas réussi.
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          # Readiness : l'appli ET la base répondent. En échec, le Pod sort des endpoints
+          # du Service (plus de trafic) mais n'est pas redémarré.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Liveness : uniquement le processus. Ne dépend pas de la base, sinon une panne
+          # de Postgres ferait redémarrer tous les backends en boucle.
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 4
+      # Racine en lecture seule : seuls ces volumes temporaires sont inscriptibles.
+      volumes:
+        - name: tmp
+          emptyDir: {}

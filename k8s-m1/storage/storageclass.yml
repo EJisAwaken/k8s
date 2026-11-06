@@ -1,0 +1,10 @@
+# Pas de provisionneur dynamique sur un cluster kubeadm nu : les PV sont créés à la main.
+# WaitForFirstConsumer : le PVC n'est lié qu'au moment où un Pod est planifié,
+# pour que le scheduler tienne compte du nœud porté par le PV.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: local-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain

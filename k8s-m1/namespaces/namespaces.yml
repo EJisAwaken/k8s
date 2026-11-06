@@ -1,0 +1,21 @@
+# Trois environnements isolés. L'application de référence tourne dans prod.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+  labels:
+    env: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test
+  labels:
+    env: test
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    env: prod

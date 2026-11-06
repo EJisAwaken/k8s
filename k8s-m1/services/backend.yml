@@ -1,0 +1,14 @@
+# Le nom backend-service est figé dans l'image frontend (BACKEND_INTERNAL_URL au build).
+# ClusterIP : le navigateur passe par le frontend, le backend n'a pas à être exposé.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: prod
+spec:
+  type: ClusterIP
+  selector:
+    app: backend
+  ports:
+    - port: 8080
+      targetPort: 8080

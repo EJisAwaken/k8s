@@ -1,0 +1,40 @@
+# Volume des sauvegardes, volontairement sur k8s-worker02 : si le disque de worker01
+# (qui porte la base) est perdu, les sauvegardes survivent.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-backups-prod
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-storage
+  claimRef:
+    namespace: prod
+    name: db-backups
+  hostPath:
+    path: /data/k8s/prod/backups
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k8s-worker02
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: db-backups
+  namespace: prod
+spec:
+  storageClassName: local-storage
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

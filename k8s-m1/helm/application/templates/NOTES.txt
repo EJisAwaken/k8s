@@ -1,0 +1,12 @@
+Application Stock déployée dans le namespace {{ .Release.Namespace }} (révision {{ .Release.Revision }}).
+
+  Frontend : http://{{ .Values.ingress.appHost }}
+  API      : http://{{ .Values.ingress.apiHost }}/actuator/health
+
+Vérifier :
+  kubectl -n {{ .Release.Namespace }} get pods,hpa,ingress
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Historique / retour arrière :
+  helm history {{ .Release.Name }} -n {{ .Release.Namespace }}
+  helm rollback {{ .Release.Name }} <révision> -n {{ .Release.Namespace }}

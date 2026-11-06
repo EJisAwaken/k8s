@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+  annotations:
+    {{- include "application.keelAnnotations" . | nindent 4 }}
+spec:
+  {{- if not .Values.backend.hpa.enabled }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        tier: api
+      annotations:
+        # Un changement de ConfigMap/Secret modifie ce hash -> nouveau rollout automatique.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | trunc 16 }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum | trunc 16 }}
+    spec:
+      {{- include "application.podSecurityContext" . | nindent 6 }}
+      {{- include "application.tolerations" . | nindent 6 }}
+      affinity:
+        {{- include "application.nodeAffinity" . | nindent 8 }}
+      # Un backend par nœud au maximum d'écart, révision par révision.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+          matchLabelKeys:
+            - pod-template-hash
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_USER } }
+            - name: DB_PASS
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_PASSWORD } }
+            - name: APP_JWT_SECRET
+              valueFrom: { secretKeyRef: { name: app-secret, key: API_TOKEN } }
+            - name: LOGGING_LEVEL_ROOT
+              value: $(LOG_LEVEL)
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage={{ .Values.backend.javaMaxRamPercentage }}"
+          {{- include "application.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          # Arrêt propre : le Pod continue de servir 10 s après le SIGTERM, le temps que les
+          # endpoints et l'Ingress cessent de lui envoyer du trafic (sinon : quelques 503 à
+          # chaque rollout, mesurés en TP). Ensuite seulement, l'application s'arrête.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          startupProbe:
+            tcpSocket: { port: http }
+            periodSeconds: {{ .Values.backend.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.backend.startupProbe.failureThreshold }}
+          readinessProbe:
+            httpGet: { path: /actuator/health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 4
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.backend.serviceName }}
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.backend.service.type }}
+  selector:
+    app: backend
+  ports:
+    - port: {{ .Values.backend.port }}
+      targetPort: http

@@ -1,0 +1,68 @@
+# Compte utilisé par le runner GitHub Actions (sur k8s-master) pour "helm upgrade".
+# Moindre privilège : Role (et non ClusterRole) => aucun droit hors du namespace prod,
+# donc ni les nœuds, ni kube-system, ni les autres namespaces.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ci-deployer
+  namespace: prod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ci-deployer
+  namespace: prod
+rules:
+  # Objets gérés par le chart helm/application.
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, serviceaccounts, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Pods : helm test (création/suppression du Pod de test), --wait (lecture), logs du test.
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, endpoints]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  # Le chart crée le Role/RoleBinding du compte developer. Kubernetes interdit de donner
+  # des droits que l'on n'a pas soi-même (anti-escalade) : ci-deployer possède déjà
+  # get/list sur pods et services, il peut donc créer ce Role.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ci-deployer
+  namespace: prod
+subjects:
+  - kind: ServiceAccount
+    name: ci-deployer
+    namespace: prod
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ci-deployer
+---
+# Jeton longue durée du compte, pour le kubeconfig du runner (voir cicd/README.md).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ci-deployer-token
+  namespace: prod
+  annotations:
+    kubernetes.io/service-account.name: ci-deployer
+type: kubernetes.io/service-account-token

@@ -1,0 +1,131 @@
+# Valeurs par défaut du chart "application" : ce qui est déployé en prod.
+# Surcharger avec -f values-<env>.yaml ou --set clé=valeur.
+
+# --- Placement (TP 9.4) ------------------------------------------------------
+scheduling:
+  # nodeAffinity requise : uniquement les nœuds portant ce label.
+  nodeAffinity:
+    key: workload
+    value: app
+  # Toleration du taint de k8s-worker02 (nœud réservé à la production).
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: prod
+      effect: NoSchedule
+
+# Keel (redéploiement auto des images :latest) est remplacé par l'étape deploy de la CI :
+# images versionnées + helm upgrade. Laissé désactivable pour mémoire.
+keel:
+  enabled: false
+  pollSchedule: "@every 2m"
+
+# Registry privé GitHub Container Registry : Secret de type docker-registry créé hors du chart
+# (il contient un jeton personnel, voir cicd/README.md).
+imagePullSecrets:
+  - name: ghcr-pull
+
+# --- Configuration non sensible -> ConfigMap app-config (TP 8.4) -------------
+config:
+  appEnv: prod
+  appName: stock
+  logLevel: INFO
+  dbName: stockdb
+  corsOrigins: http://app.k8s.local
+  cookieSecure: false
+
+# --- Données sensibles -> Secret app-secret (TP 8.4) --------------------------
+# Laisser vide : la valeur actuelle du Secret est conservée (lookup) ; à la première
+# installation, un mot de passe/jeton aléatoire est généré. Ne jamais commiter de vraie valeur ici.
+secret:
+  dbUser: stockuser
+  dbPassword: ""
+  apiToken: ""          # clé de signature des JWT du backend
+  backupPassword: ""    # rôle PostgreSQL stock_backup (lecture seule)
+
+# --- Frontend Next.js ----------------------------------------------------------
+frontend:
+  replicaCount: 3       # utilisé seulement si l'HPA est désactivé
+  image:
+    repository: ghcr.io/ejisawaken/stock-frontend
+    tag: ""               # vide = v<appVersion> du Chart.yaml ; la CI passe le tag de la release
+    pullPolicy: IfNotPresent   # un tag versionné ne change jamais : inutile de re-télécharger
+  port: 3000            # non-root : pas de port < 1024
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPU: 60
+
+# --- Backend Spring Boot -------------------------------------------------------
+backend:
+  replicaCount: 2
+  image:
+    repository: ghcr.io/ejisawaken/stock-backend
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 8080
+  # Nom figé dans l'image frontend (BACKEND_INTERNAL_URL au build) : ne pas changer.
+  serviceName: backend-service
+  service:
+    type: ClusterIP
+  javaMaxRamPercentage: 70
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  # Spring démarre en 60 à 110 s : 36 x 5 s = 180 s de marge.
+  startupProbe:
+    periodSeconds: 5
+    failureThreshold: 36
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPU: 60
+
+# --- PostgreSQL (StatefulSet) --------------------------------------------------
+database:
+  image: postgres:16-alpine
+  storageClass: local-storage
+  storage: 5Gi
+  # Nœud qui porte le PV de la base (voir storage/pv-postgres.yml).
+  nodeSelector:
+    storage: db
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# --- Ingress (TP 8.3) ----------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  appHost: app.k8s.local
+  apiHost: api.k8s.local
+
+# --- Sauvegarde quotidienne (TP 9.5) -------------------------------------------
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  timeZone: Indian/Antananarivo
+  retentionDays: 7
+  # PVC créé avec son PV dans storage/pv-backups.yml (lié à un nœud).
+  existingClaim: db-backups
+
+# Job d'initialisation (rôle stock_backup), exécuté après chaque install/upgrade.
+dbInit:
+  enabled: true
+
+# --- Sécurité (TP 10.3 / 10.4) ------------------------------------------------
+networkPolicy:
+  enabled: true
+  ingressControllerNamespace: ingress-nginx
+
+rbac:
+  developer:
+    enabled: true

@@ -1,0 +1,86 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-frontend
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
+        - podSelector:
+            matchLabels:
+              app: load-generator
+        - podSelector:
+            matchLabels:
+              helm-test: "true"
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-to-backend
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressControllerNamespace }}
+        - podSelector:
+            matchLabels:
+              helm-test: "true"
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.port }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-database
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              db-access: "true"
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}

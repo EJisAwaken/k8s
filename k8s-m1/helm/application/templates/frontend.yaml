@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+  annotations:
+    {{- include "application.keelAnnotations" . | nindent 4 }}
+spec:
+  {{- if not .Values.frontend.hpa.enabled }}
+  replicas: {{ .Values.frontend.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        tier: web
+    spec:
+      {{- include "application.podSecurityContext" . | nindent 6 }}
+      {{- include "application.tolerations" . | nindent 6 }}
+      affinity:
+        {{- include "application.nodeAffinity" . | nindent 8 }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: frontend
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 30
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: backend
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: frontend
+          image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.frontend.port }}
+          env:
+            - name: PORT
+              value: {{ .Values.frontend.port | quote }}
+          {{- include "application.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: next-cache
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+          # Arrêt propre : le Pod continue de servir 10 s après le SIGTERM, le temps que les
+          # endpoints et l'Ingress cessent de lui envoyer du trafic (sinon : quelques 503 à
+          # chaque rollout, mesurés en TP). Ensuite seulement, l'application s'arrête.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          startupProbe:
+            httpGet: { path: /favicon.ico, port: http }
+            periodSeconds: 3
+            failureThreshold: 20
+          readinessProbe:
+            httpGet: { path: /login, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /favicon.ico, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: next-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.frontend.service.type }}
+  selector:
+    app: frontend
+  ports:
+    - port: {{ .Values.frontend.service.port }}
+      targetPort: http

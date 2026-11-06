@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: prod
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 2m"
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        tier: web
+    spec:
+      # SecurityContext du Pod (TP 10.5) : jamais root, profil seccomp par défaut du runtime.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Autorisé sur k8s-worker02, nœud réservé à la production (taint dedicated=prod).
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: prod
+          effect: NoSchedule
+      affinity:
+        nodeAffinity:
+          # Uniquement sur les Workers marqués workload=app (le master reste exclu).
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: workload
+                    operator: In
+                    values: ["app"]
+        # Anti-affinité PRÉFÉRÉE : éviter deux frontends sur le même nœud.
+        # "preferred" et non "required" : l'HPA peut monter à 10 replicas sur 2 Workers.
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: frontend
+        # Affinité PRÉFÉRÉE : se rapprocher d'un nœud qui héberge déjà un backend
+        # (le proxy /api/v1 reste local au nœud). Poids plus faible que l'anti-affinité.
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 30
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: backend
+      containers:
+        - name: frontend
+          image: josefa613/stock_frontend_prod:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          # Un utilisateur non-root ne peut pas écouter sur un port < 1024 : Next.js passe sur 3000
+          # (l'image définit PORT=80, la variable d'environnement l'emporte à l'exécution).
+          env:
+            - name: PORT
+              value: "3000"
+          # Mesuré : ~45Mi au repos.
+          # SecurityContext du conteneur : système de fichiers en lecture seule, aucune capability
+          # Linux, pas d'élévation de privilèges (setuid, sudo...).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: next-cache     # cache d'optimisation d'images de Next.js
+              mountPath: /app/.next/cache
+            - name: tmp
+              mountPath: /tmp
+          # Arrêt propre : le Pod continue de servir 10 s après le SIGTERM, le temps que les
+          # endpoints et l'Ingress cessent de lui envoyer du trafic (sinon : quelques 503 à
+          # chaque rollout, mesurés en TP). Ensuite seulement, l'application s'arrête.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "10"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /favicon.ico
+              port: http
+            periodSeconds: 3
+            failureThreshold: 20
+          # /login fait un vrai rendu Next.js (200) ; "/" renvoie un 307 vers /login.
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /favicon.ico
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: next-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

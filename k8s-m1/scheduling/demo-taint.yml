@@ -1,0 +1,36 @@
+# Démonstration du taint de k8s-worker02 (dedicated=prod:NoSchedule).
+# Les deux Pods visent worker02 via nodeSelector ; seul celui qui a la toleration y est placé.
+#   kubectl apply -f scheduling/demo-taint.yml
+#   kubectl -n dev get pods -o wide
+#   kubectl -n dev describe pod sans-toleration   # Events : "untolerated taint {dedicated: prod}"
+#   kubectl delete -f scheduling/demo-taint.yml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sans-toleration
+  namespace: dev
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: k8s-worker02
+  containers:
+    - name: pause
+      image: busybox:1.37
+      command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: avec-toleration
+  namespace: dev
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: k8s-worker02
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: prod
+      effect: NoSchedule
+  containers:
+    - name: pause
+      image: busybox:1.37
+      command: ["sleep", "3600"]

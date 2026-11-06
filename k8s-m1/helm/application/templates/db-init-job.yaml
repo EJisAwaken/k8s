@@ -1,0 +1,62 @@
+{{- if .Values.dbInit.enabled }}
+# Hook Helm : exécuté après chaque install/upgrade. Le Job précédent est supprimé avant
+# (before-hook-creation), ce qui contourne l'immuabilité des Jobs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: db-init
+  labels:
+    {{- include "application.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 4
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        app: db-init
+        db-access: "true"
+    spec:
+      restartPolicy: OnFailure
+      {{- include "application.tolerations" . | nindent 6 }}
+      initContainers:
+        - name: wait-for-db
+          image: {{ .Values.database.image }}
+          command: ["sh", "-c", "until pg_isready -h database -p 5432; do echo 'base indisponible, attente...'; sleep 3; done"]
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      containers:
+        - name: init
+          image: {{ .Values.database.image }}
+          env:
+            - name: PGHOST
+              value: database
+            - name: PGDATABASE
+              valueFrom: { configMapKeyRef: { name: app-config, key: DB_NAME } }
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_USER } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_PASSWORD } }
+            - name: BACKUP_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: DB_BACKUP_PASSWORD } }
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              psql -v ON_ERROR_STOP=1 -v pw="$BACKUP_PASSWORD" -v db="$PGDATABASE" <<'SQL'
+              SELECT 'CREATE ROLE stock_backup LOGIN'
+               WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stock_backup') \gexec
+              ALTER ROLE stock_backup WITH LOGIN PASSWORD :'pw';
+              GRANT CONNECT ON DATABASE :"db" TO stock_backup;
+              GRANT pg_read_all_data TO stock_backup;
+              SQL
+              echo "Rôle stock_backup prêt."
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+{{- end }}

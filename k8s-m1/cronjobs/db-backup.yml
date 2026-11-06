@@ -1,0 +1,78 @@
+# Sauvegarde quotidienne de la base (TP 9.5), conservée 7 jours.
+#   Déclencher à la main :  kubectl -n prod create job --from=cronjob/db-backup db-backup-manuel
+#   Suivre :                kubectl -n prod get cronjob,jobs ; kubectl -n prod logs job/db-backup-manuel
+# Restaurer :
+#   kubectl -n prod exec -i database-0 -- pg_restore -U stockuser -d stockdb --clean --if-exists < stockdb-XXXX.dump
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: db-backup
+  namespace: prod
+spec:
+  schedule: "0 2 * * *"                 # tous les jours à 02:00
+  timeZone: Indian/Antananarivo
+  concurrencyPolicy: Forbid             # jamais deux sauvegardes en parallèle
+  startingDeadlineSeconds: 600          # si le créneau est manqué de plus de 10 min, on saute
+  successfulJobsHistoryLimit: 3         # historique conservé (kubectl get jobs)
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app: db-backup
+            db-access: "true"           # autorisé par la NetworkPolicy de la base
+        spec:
+          restartPolicy: OnFailure
+          # Le PV des sauvegardes est sur worker02 (nœud tainté) : toleration indispensable.
+          tolerations:
+            - key: dedicated
+              operator: Equal
+              value: prod
+              effect: NoSchedule
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGHOST
+                  value: database
+                - name: PGUSER
+                  value: stock_backup     # rôle en lecture seule créé par jobs/db-init.yml
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: app-secret, key: DB_BACKUP_PASSWORD } }
+                - name: PGDATABASE
+                  valueFrom: { configMapKeyRef: { name: app-config, key: DB_NAME } }
+                - name: RETENTION_DAYS
+                  value: "7"
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  f="/backups/${PGDATABASE}-$(date +%Y%m%d-%H%M%S).dump"
+                  # Un dump interrompu ne doit jamais laisser de fichier derrière lui.
+                  trap 'rm -f "$f.tmp"' EXIT
+                  # Un Pod tout neuf peut ne pas encore être autorisé par la NetworkPolicy
+                  # (Calico met quelques secondes à l'appliquer) : on attend la base jusqu'à 60 s.
+                  for i in $(seq 1 30); do pg_isready -q && break; sleep 2; done
+                  pg_isready
+                  # Format custom (-Fc) : compressé, restaurable table par table avec pg_restore.
+                  # --no-owner/--no-privileges : le rôle de sauvegarde n'a besoin que de lire.
+                  pg_dump -Fc --no-owner --no-privileges -f "$f.tmp"
+                  mv "$f.tmp" "$f"     # le fichier final n'apparaît que si le dump a réussi
+                  echo "Sauvegarde OK : $f ($(du -h "$f" | cut -f1))"
+                  find /backups -name '*.dump' -mtime +"$RETENTION_DAYS" -print -delete
+                  find /backups -name '*.tmp' -print -delete    # restes d'un ancien échec
+                  echo "Sauvegardes présentes :"; ls -lh /backups
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 500m, memory: 256Mi }
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: db-backups

@@ -1,0 +1,25 @@
+# La base n'accepte QUE le backend et les Pods d'exploitation explicitement marqués
+# db-access: "true" (Job d'init, CronJob de sauvegarde). Ni le frontend, ni l'Ingress,
+# ni un autre namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-database
+  namespace: prod
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: backend
+        - podSelector:
+            matchLabels:
+              db-access: "true"
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -1,0 +1,33 @@
+# Génère de la charge sur le frontend pour observer l'HPA :
+#   kubectl apply -f hpa/load-generator.yml
+#   kubectl -n prod get hpa -w          (dans un autre terminal : kubectl -n prod get pods -w)
+# Le Job s'arrête seul après 5 minutes (activeDeadlineSeconds).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: load-generator
+  namespace: prod
+spec:
+  parallelism: 4
+  completions: 4
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        app: load-generator
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: prod
+          effect: NoSchedule
+      containers:
+        - name: load
+          image: busybox:1.37
+          # /login force un rendu Next.js côté serveur : bien plus coûteux qu'un fichier statique.
+          command: ["sh", "-c", "while true; do wget -q -O /dev/null http://frontend/login; done"]
+          resources:
+            requests: { cpu: 50m, memory: 16Mi }
+            limits: { cpu: 200m, memory: 32Mi }

@@ -1,0 +1,27 @@
+# helm test application -n prod : vérifie que l'application répond de bout en bout.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: application-test
+  labels:
+    helm-test: "true"     # autorisé par les NetworkPolicy du frontend et du backend
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "application.tolerations" . | nindent 2 }}
+  containers:
+    - name: test
+      image: busybox:1.37
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          echo "frontend : $(wget -q -S -O /dev/null http://frontend:{{ .Values.frontend.service.port }}/login 2>&1 | grep -m1 HTTP)"
+          echo "backend  : $(wget -q -O - http://{{ .Values.backend.serviceName }}:{{ .Values.backend.port }}/actuator/health)"
+          wget -q -O - http://{{ .Values.backend.serviceName }}:{{ .Values.backend.port }}/actuator/health | grep -q '"UP"'
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { cpu: 100m, memory: 32Mi }

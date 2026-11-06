@@ -1,0 +1,13 @@
+# ClusterIP : l'accès externe passe désormais par l'Ingress (app.k8s.local).
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: prod
+spec:
+  type: ClusterIP
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: http   # port nommé du conteneur (3000)
