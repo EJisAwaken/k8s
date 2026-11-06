@@ -69,7 +69,23 @@ Incidents réellement rencontrés pendant la construction de la plateforme. Form
 - **Correction** : lifecycle.preStop qui attend 10 s (sleep 10) sur le backend et le frontend : le Pod continue de servir pendant que le trafic est détourné, puis s'arrête proprement.
 - **Vérification** : mesure renouvelée à 2 requêtes par seconde pendant un upgrade complet (les deux backends remplacés) et le début du rollback : 600 réponses 200 sur 600, aucune erreur.
 
-## Incident n°9 (simulé) – Règle d'Ingress erronée
+## Incident n°9 – Échec du build de la première release
+
+- **Symptôme** : release v2.1.0, les deux jobs build-push échouent en quelques secondes ; le job deploy est ignoré.
+- **Diagnostic** : gh run view <id> --log-failed.
+- **Preuve** : « invalid reference format: repository name (EJisAwaken/stock-frontend) must be lowercase ».
+- **Cause racine** : les noms de dépôt Docker doivent être en minuscules. docker/metadata-action convertit le nom de l'image, mais les références du cache buildx étaient construites directement avec github.repository_owner (EJisAwaken).
+- **Correction** : une étape calcule une seule fois le nom en minuscules (${GITHUB_REPOSITORY_OWNER,,}), réutilisé pour les tags et le cache. La release v2.1.0, qui n'avait produit aucun artefact, a été recréée sur le commit corrigé.
+- **Vérification** : pipeline complet au vert (tests, build-push x2, deploy) ; production sur ghcr.io/ejisawaken/stock-*:v2.1.0.
+
+## Incident n°10 – Images du registry accessibles sans authentification
+
+- **Symptôme** : le cluster télécharge les images, mais un test d'accès anonyme au manifeste répond HTTP 200.
+- **Cause racine** : ghcr.io donne aux nouveaux paquets la visibilité du dépôt GitHub, qui est public. La visibilité d'un paquet ne se change que dans l'interface GitHub, pas par l'API.
+- **Statut** : accepté pour l'instant (dépôt et images publics). Correction prévue : passer les paquets en Private, puis vérifier qu'un accès anonyme répond 401 et que le cluster tire bien les images grâce à ghcr-pull.
+- **Leçon** : un téléchargement réussi ne prouve pas que l'authentification fonctionne. Il faut aussi tester le cas négatif (sans jeton).
+
+## Incident n°11 (simulé) – Règle d'Ingress erronée
 
 Voir 8.3 : 503 ; la règle vise frontend:8888 alors que le Service n'expose que le port 80 ; le journal du contrôleur montre l'upstream prod-frontend-8888 ; correction par le manifest versionné.
 
